@@ -252,7 +252,7 @@
     return string;
 }
 
-- (NSString *)_scanParameter 
+- (NSString *)_scanParameter
 {
     // TODO: handle comments in parameters
     // eg: NSLocalizedString("Something", /* blah */ nil)
@@ -262,41 +262,41 @@
     
     NSInteger parenCount = 0;
     
-    while (keepGoing && _currentIndex < _charactersRange.length) 
+    while (keepGoing && _currentIndex < _charactersRange.length)
     {
         unichar character = _characters[_currentIndex];
-        if (character == ',') 
+        if (character == ',')
         {
             keepGoing = NO;
         }
-        else if (character == '(') 
+        else if (character == '(')
         {
             _currentIndex++;
             parenCount++;
         }
-        else if (character == ')') 
+        else if (character == ')')
         {
             parenCount--;
-            if (parenCount >= 0) 
+            if (parenCount >= 0)
             {
                 _currentIndex++;
             }
-            else 
+            else
             {
                 keepGoing = NO;
             }
         }
-        else if (character == '"') 
+        else if (character == '"')
         {
             if (quotedString) {
-              quotedString = [[quotedString substringToIndex:quotedString.length-1]
-                              stringByAppendingString:[[self _scanQuotedString] substringFromIndex:1]];
+                quotedString = [[quotedString substringToIndex:quotedString.length-1]
+                                stringByAppendingString:[[self _scanQuotedString] substringFromIndex:1]];
             }
             else {
-              quotedString = [self _scanQuotedString];
+                quotedString = [self _scanQuotedString];
             }
         }
-        else 
+        else
         {
             _currentIndex++;
         }
@@ -311,8 +311,34 @@
     return [[NSString alloc] initWithCharacters:(_characters+parameterStartIndex) length:length];
 }
 
+- (NSString *)_scanParameterName
+{
+    NSUInteger parameterStartIndex = _currentIndex;
+    BOOL keepGoing = YES;
+    NSString *parameterName = nil;
+    
+    while (keepGoing && _currentIndex < _charactersRange.length)
+    {
+        unichar character = _characters[_currentIndex];
+        if (isalpha(character)) {
+            _currentIndex++;
+        } else if (character == ':') {
+            NSUInteger length = _currentIndex - parameterStartIndex;
+            parameterName = [[NSString alloc] initWithCharacters:(_characters+parameterStartIndex) length:length];
+            _currentIndex++;
+            return parameterName;
+        } else {
+            break;
+        }
+    }
+    _currentIndex = parameterStartIndex;
+    return @"";
+}
+
 - (BOOL)_processMacroAtRange:(NSRange)range
-{        
+{
+//    NSRange rEnd = [_charactersAsString rangeOfString:@")" options:0 range:NSMakeRange(range.location, _charactersAsString.length-range.location)];
+//    NSLog(@"processMacro:[%@]", [_charactersAsString substringWithRange:NSMakeRange(range.location, rEnd.location-range.location+1)]);
     if (_characters == nil) {
         _charactersRange = NSMakeRange(range.location, [_charactersAsString length] - range.location);        
         _characters = calloc(_charactersRange.length, sizeof(unichar));
@@ -320,6 +346,7 @@
     }     
     _currentIndex = range.location + range.length - _charactersRange.location;
     
+    NSMutableArray *parameterNames = [[NSMutableArray alloc] initWithCapacity:3];
     NSMutableArray *parameters = [[NSMutableArray alloc] initWithCapacity:3];
     
     // skip any whitespace between here and the (
@@ -336,11 +363,13 @@
             [self _scanWhitespace];
             
             // scan a parameter
+            NSString *parameterName = [self _scanParameterName];
             NSString *parameter = [self _scanParameter];
             
             if (parameter) 
             {
                 // we found one!
+                [parameterNames addObject:parameterName];
                 // single slash unicode sequences need to be decoded on reading
                 [parameters addObject:[parameter stringByDecodingUnicodeSequences]];
                 
@@ -405,8 +434,35 @@
             }
             
             return YES;
-        } 
-        else 
+        }
+        else if ([macroName isEqualToString:@"NSLocalizedString"] && [parameters count] > 2)
+        {
+            // Special handling for Swift (additional named parameters may be present)
+            DTLocalizableStringEntry *entry = [[DTLocalizableStringEntry alloc] init];
+            entry.rawKey = parameters[0];
+            for (NSInteger i=1;i<parameters.count;i++) {
+                NSString *parameterName = parameterNames[i];
+                if ([parameterName isEqualToString:@"comment"]) {
+                    [entry setComment:parameters[i]];
+                } else if ([parameterName isEqualToString:@"tableName"]) {
+                    NSString *tableName = [parameters[i] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                    if (![tableName isEqualToString:@"nil"]) {
+                        [entry setTableName:tableName];
+                    }
+                } else if ([parameterName isEqualToString:@"bundle"]) {
+                    [entry setBundle:parameters[i]];
+                } else if ([parameterName isEqualToString:@"value"]) {
+                    [entry setRawValue:parameters[i]];
+                }
+            }
+
+            if (_entryFoundCallback) {
+                _entryFoundCallback(entry);
+            }
+            
+            return YES;
+        }
+        else
         {
             NSLog(@"mismatch of parameters for %@ macro", macroName);
         }
